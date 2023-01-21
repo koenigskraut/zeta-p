@@ -9,9 +9,9 @@ pub fn build(b: *std.build.Builder) void {
     lib.setBuildMode(mode);
     lib.install();
 
-    const generic_tests = b.addTest("src/generic.zig");
-    generic_tests.setBuildMode(mode);
+    const enums_tests = b.addTest("src/enums.zig");
+    enums_tests.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&generic_tests.step);
+    test_step.dependOn(&enums_tests.step);
 }
