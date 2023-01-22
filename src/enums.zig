@@ -282,16 +282,16 @@ pub fn DiffUntagged(comptime A: type, comptime B: type) type {
     return Diff(A, B, options);
 }
 
-/// Set **symmetric difference** operation on enums `A △ B = (A ∪ B) \ (A ∩ B)`, also denoted as `A ⊖ B`
+/// Set **symmetric difference** operation on enums `A △ B = (A \ B) ∪ (B \ A)`, also denoted as `A ⊖ B`
 pub fn Xor(comptime A: type, comptime B: type, comptime options: Options) type {
-    return Diff(
-        Or(A, B, options),
-        And(A, B, options),
+    return Or(
+        Diff(A, B, options),
+        Diff(B, A, options),
         options,
     );
 }
 
-/// Set **symmetric difference** operation on enums `A △ B = (A ∪ B) \ (A ∩ B)`, also denoted as `A ⊖ B`,
+/// Set **symmetric difference** operation on enums `A △ B = (A \ B) ∪ (B \ A)`, also denoted as `A ⊖ B`,
 /// enums treated as untagged
 pub fn XorUntagged(comptime A: type, comptime B: type) type {
     const options = Options{
@@ -373,7 +373,7 @@ test "enum AND" {
         // pick exact tag, min value
         const A = enum(u5) { a = 1, b = 2, c = 3 };
         const B = enum(u7) { b = 1, c = 2, d = 3 };
-        comptime var T = u8;
+        const T = u8;
         const C = And(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .min } });
         const info = @typeInfo(C).Enum;
         try testing.expect(info.fields.len == 2);
@@ -385,7 +385,7 @@ test "enum AND" {
         // pick exact tag, max value
         const A = enum(u5) { a = 1, b = 2, c = 3 };
         const B = enum(u7) { b = 1, c = 2, d = 3 };
-        comptime var T = u8;
+        const T = u8;
         const C = And(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .max } });
         const info = @typeInfo(C).Enum;
         try testing.expect(info.fields.len == 2);
@@ -469,7 +469,7 @@ test "enum OR" {
         // pick exact tag, min value
         const A = enum(u5) { a = 0, b = 3 };
         const B = enum(u7) { b = 1, c = 2 };
-        comptime var T = u8;
+        const T = u8;
         const C = Or(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .min } });
         const info = @typeInfo(C).Enum;
         try testing.expect(info.fields.len == 3);
@@ -482,7 +482,7 @@ test "enum OR" {
         // pick exact tag, max value
         const A = enum(u5) { a = 0, b = 3 };
         const B = enum(u7) { b = 1, c = 2 };
-        comptime var T = u8;
+        const T = u8;
         const C = Or(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .max } });
         const info = @typeInfo(C).Enum;
         try testing.expect(info.fields.len == 3);
@@ -490,6 +490,152 @@ test "enum OR" {
         try testing.expect(@enumToInt(C.a) == 0);
         try testing.expect(@enumToInt(C.b) == 3);
         try testing.expect(@enumToInt(C.c) == 2);
+    }
+}
+
+test "enum difference untagged" {
+    const A = enum {
+        a,
+        b,
+        c,
+    };
+    const B = enum {
+        c,
+        d,
+        e,
+    };
+
+    const C = DiffUntagged(A, B);
+
+    const info = @typeInfo(C).Enum;
+    try testing.expect(info.fields.len == 2);
+    try testing.expect(info.tag_type == u1);
+    try testing.expectEqual(@enumToInt(C.a), 0);
+    try testing.expectEqual(@enumToInt(C.b), 1);
+}
+
+test "enum difference" {
+    {
+        // default behaviour is to expect equal tags/values,
+        // throw compile error otherwise; in case of diff operation
+        // second comparison is irrelevant
+        const A = enum(u8) { a = 1, b = 2, c = 3 };
+        const B = enum(u8) { c = 1, d = 2, e = 3 };
+        const C = Diff(A, B, .{});
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == u8);
+        try testing.expect(@enumToInt(C.a) == 1);
+        try testing.expect(@enumToInt(C.b) == 2);
+    }
+    {
+        // auto value/tag fill (same as untagged)
+        const A = enum(u5) { a = 0, b = 1, c = 2 };
+        const B = enum(u7) { c = 1, d = 2, e = 3 };
+        const C = Diff(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == u1);
+        try testing.expect(@enumToInt(C.a) == 0);
+        try testing.expect(@enumToInt(C.b) == 1);
+    }
+    {
+        // pick first tag/value
+        const A = enum(u5) { a = 1, b = 2, c = 3 };
+        const B = enum(u7) { c = 1, d = 2, e = 3 };
+        const C = Diff(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == u5);
+        try testing.expect(@enumToInt(C.a) == 1);
+        try testing.expect(@enumToInt(C.b) == 2);
+    }
+    // picking second tag/value or min/max value doesn't make sense for diff operation
+    {
+        // pick exact tag, auto value
+        const A = enum(u5) { a = 1, b = 2, c = 3 };
+        const B = enum(u7) { c = 1, d = 2, e = 3 };
+        const T = u4;
+        const C = Diff(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .auto } });
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == T);
+        try testing.expect(@enumToInt(C.a) == 0);
+        try testing.expect(@enumToInt(C.b) == 1);
+    }
+}
+
+test "enum XOR untagged" {
+    const A = enum {
+        a,
+        b,
+        c,
+    };
+    const B = enum {
+        c,
+        d,
+        e,
+    };
+
+    const C = XorUntagged(A, B);
+
+    const info = @typeInfo(C).Enum;
+    try testing.expect(info.fields.len == 4);
+    try testing.expect(info.tag_type == u2);
+    try testing.expectEqual(@enumToInt(C.a), 0);
+    try testing.expectEqual(@enumToInt(C.b), 1);
+    try testing.expectEqual(@enumToInt(C.d), 2);
+    try testing.expectEqual(@enumToInt(C.e), 3);
+}
+
+test "enum XOR" {
+    {
+        // default behaviour is to expect equal tags/values,
+        // throw compile error otherwise; in case of XOR operation
+        // second comparison is irrelevant
+        const A = enum(u8) { a = 1, b = 2, c = 3 };
+        const B = enum(u8) { b = 1, c = 2, d = 3 };
+        const C = Xor(A, B, .{});
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == u8);
+        try testing.expect(@enumToInt(C.a) == 1);
+        try testing.expect(@enumToInt(C.d) == 3);
+    }
+    {
+        // auto value/tag fill (same as untagged)
+        const A = enum(u5) { a = 0, b = 1, c = 2 };
+        const B = enum(u7) { b = 1, c = 2, d = 3 };
+        const C = Xor(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == u1);
+        try testing.expect(@enumToInt(C.a) == 0);
+        try testing.expect(@enumToInt(C.d) == 1);
+    }
+    {
+        // pick first tag/value
+        const A = enum(u5) { a = 1, b = 2, c = 3 };
+        const B = enum(u7) { b = 1, c = 2, d = 3 };
+        const C = Xor(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == u5);
+        try testing.expect(@enumToInt(C.a) == 1);
+        try testing.expect(@enumToInt(C.d) == 3);
+    }
+    // picking second tag/value or min/max value doesn't make sense for XOR operation
+    {
+        // pick exact tag, auto value
+        const A = enum(u5) { a = 1, b = 2, c = 3 };
+        const B = enum(u7) { b = 1, c = 2, d = 3 };
+        const T = u4;
+        const C = Xor(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .auto } });
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == T);
+        try testing.expect(@enumToInt(C.a) == 0);
+        try testing.expect(@enumToInt(C.d) == 1);
     }
 }
 
