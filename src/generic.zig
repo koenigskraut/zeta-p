@@ -4,11 +4,15 @@ const testing = std.testing;
 
 /// A bit more reliable than passing `*anyopaque`, **only for comptime**.
 /// Use `const bar = Any.wrap(&foo);` to wrap pointer to `foo` in `Any` type.
-/// Than use `const ptr = bar.unwrap();` to get this pointer back with its preserved type.
+/// Than use `bar.unwrap()` to get this pointer back with its preserved type.
 /// You can get the type of the content wrapped in `Any` by accessing its `T` field.
 pub const Any = struct {
+    /// the real type of the value pointed to by `ptr`
     T: type,
-    ptr: union(enum) { Var: *anyopaque, Const: *const anyopaque },
+    /// union, either const or var pointer to anyopaque
+    ptr: AnyPtr,
+
+    pub const AnyPtr = union(enum) { Var: *anyopaque, Const: *const anyopaque };
 
     pub fn wrap(comptime value: anytype) Any {
         const info = @typeInfo(@TypeOf(value));

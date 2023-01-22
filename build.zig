@@ -11,6 +11,7 @@ pub fn build(b: *std.build.Builder) void {
 
     const tests = b.addTest("src/main.zig");
     tests.setBuildMode(mode);
+    tests.emit_docs = .emit;
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&tests.step);
