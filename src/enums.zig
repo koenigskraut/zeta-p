@@ -284,10 +284,12 @@ pub fn DiffUntagged(comptime A: type, comptime B: type) type {
 
 /// Set **symmetric difference** operation on enums `A △ B = (A \ B) ∪ (B \ A)`, also denoted as `A ⊖ B`
 pub fn Xor(comptime A: type, comptime B: type, comptime options: Options) type {
+    var opts = options;
+    if (opts.tag == .predefined and opts.tag.predefined == .second) opts.tag = .{ .predefined = .first };
     return Or(
         Diff(A, B, options),
         Diff(B, A, options),
-        options,
+        opts,
     );
 }
 
@@ -550,7 +552,18 @@ test "enum difference" {
         try testing.expect(@enumToInt(C.a) == 1);
         try testing.expect(@enumToInt(C.b) == 2);
     }
-    // picking second tag/value or min/max value doesn't make sense for diff operation
+    // picking second/min/max value doesn't make sense for diff operation
+    {
+        // pick second tag, auto value
+        const A = enum(u5) { a = 1, b = 2, c = 3 };
+        const B = enum(u7) { c = 1, d = 2, e = 3 };
+        const C = Diff(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .auto } });
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == u7);
+        try testing.expect(@enumToInt(C.a) == 0);
+        try testing.expect(@enumToInt(C.b) == 1);
+    }
     {
         // pick exact tag, auto value
         const A = enum(u5) { a = 1, b = 2, c = 3 };
@@ -624,7 +637,18 @@ test "enum XOR" {
         try testing.expect(@enumToInt(C.a) == 1);
         try testing.expect(@enumToInt(C.d) == 3);
     }
-    // picking second tag/value or min/max value doesn't make sense for XOR operation
+    // picking second/min/max value doesn't make sense for XOR operation
+    {
+        // pick second tag, auto value
+        const A = enum(u5) { a = 1, b = 2, c = 3 };
+        const B = enum(u7) { b = 1, c = 2, d = 3 };
+        const C = Xor(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .auto } });
+        const info = @typeInfo(C).Enum;
+        try testing.expect(info.fields.len == 2);
+        try testing.expect(info.tag_type == u7);
+        try testing.expect(@enumToInt(C.a) == 0);
+        try testing.expect(@enumToInt(C.d) == 1);
+    }
     {
         // pick exact tag, auto value
         const A = enum(u5) { a = 1, b = 2, c = 3 };
