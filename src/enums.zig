@@ -16,6 +16,19 @@ fn enumsCompatible(comptime A: type, comptime B: type) bool {
     return layoutsMatch and exhaustiveMatch;
 }
 
+fn expectIdenticalEnums(comptime A: type, comptime B: type) !void {
+    comptime {
+        if (!enumsCompatible(A, B)) return error.TestUnexpectedResult;
+        var result = @typeInfo(A).Enum.tag_type == @typeInfo(B).Enum.tag_type;
+        result = result and meta.fields(A).len == meta.fields(B).len;
+        result = result and blk: for (meta.fields(A)) |field, i| {
+            if (!std.mem.eql(u8, meta.fields(B)[i].name, field.name)) break :blk false;
+            if (meta.fields(B)[i].value != field.value) break :blk false;
+        } else break :blk true;
+        if (!result) return error.TestUnexpectedResult;
+    }
+}
+
 pub const Options = struct {
     tag: TagRule = .{ .predefined = .equal },
     tag_arg: ?Any = null,
@@ -167,6 +180,48 @@ pub fn And(comptime A: type, comptime B: type, comptime options: Options) type {
     return @Type(C);
 }
 
+test "enum AND" {
+    {
+        const A = enum(u8) { a = 0, b = 1, c = 2 };
+        const B = enum(u8) { b = 1, c = 2, d = 3 };
+
+        // default behaviour is to expect equal tags/values,
+        // throw compile error otherwise
+        // (u8){a=0, b=1, c=2} ∩ (u8){b=1, c=2, d=3} = (u8){b=1, c=2}
+        const CDefault = And(A, B, .{});
+        try expectIdenticalEnums(CDefault, enum(u8) { b = 1, c });
+    }
+
+    const A = enum(u5) { a = 1, b = 2, c = 3 };
+    const B = enum(u7) { b = 1, c = 2, d = 3 };
+
+    // auto value/tag fill (same as untagged)
+    // (u5){a=1, b=2, c=3} ∩ (u7){b=1, c=2, d=3} = {b, c}
+    const CAuto = And(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
+    try expectIdenticalEnums(CAuto, enum { b, c });
+
+    // pick first tag/value
+    // (u5){a=1, b=2, c=3} ∩ (u7){b=1, c=2, d=3} = (u5){b=2, c=3}
+    const CFirst = And(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
+    try expectIdenticalEnums(CFirst, enum(u5) { b = 2, c });
+
+    // pick second tag/value
+    // (u5){a=1, b=2, c=3} ∩ (u7){b=1, c=2, d=3} = (u7){b=1, c=2}
+    const CSecond = And(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .second } });
+    try expectIdenticalEnums(CSecond, enum(u7) { b = 1, c });
+
+    // pick exact tag (u8), min value
+    // (u5){a=1, b=2, c=3} ∩ (u7){b=1, c=2, d=3} = (u8){b=1, c=2}
+    const T = u8;
+    const CExactMin = And(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .min } });
+    try expectIdenticalEnums(CExactMin, enum(T) { b = 1, c });
+
+    // pick exact tag (u8), max value
+    // (u5){a=1, b=2, c=3} ∩ (u7){b=1, c=2, d=3} = (u8){b=2, c=3}
+    const CExactMax = And(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .max } });
+    try expectIdenticalEnums(CExactMax, enum(T) { b = 2, c });
+}
+
 /// Set **intersection** operation on enums `A ∩ B`, enums treated as untagged
 pub fn AndUntagged(comptime A: type, comptime B: type) type {
     const options = Options{
@@ -175,6 +230,15 @@ pub fn AndUntagged(comptime A: type, comptime B: type) type {
     };
 
     return And(A, B, options);
+}
+
+test "enum AND untagged" {
+    const A = enum { a, b, c };
+    const B = enum { b, c, d };
+
+    // {a, b, c} ∩ {b, c, d} = {b, c}
+    const C = AndUntagged(A, B);
+    try expectIdenticalEnums(C, enum { b, c });
 }
 
 /// Set **union** operation on enums `A ∪ B`
@@ -223,6 +287,48 @@ pub fn Or(comptime A: type, comptime B: type, comptime options: Options) type {
     return @Type(C);
 }
 
+test "enum OR" {
+    {
+        const A = enum(u8) { a = 1, b = 2 };
+        const B = enum(u8) { b = 2, c = 3 };
+
+        // default behaviour is to expect equal tags/values,
+        // throw compile error otherwise
+        // (u8){a=1, b=2} ∪ (u8){b=2, c=3} = (u8){a=1, b=2, c=3}
+        const CDefault = Or(A, B, .{});
+        try expectIdenticalEnums(CDefault, enum(u8) { a = 1, b, c });
+    }
+
+    const A = enum(u5) { a = 1, b = 2 };
+    const B = enum(u7) { b = 4, c = 3 };
+
+    // auto value/tag fill (same as untagged)
+    // (u5){a=1, b=2} ∪ (u7){b=4, c=3} = {a, b, c}
+    const CAuto = Or(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
+    try expectIdenticalEnums(CAuto, enum { a, b, c });
+
+    // pick first tag/value
+    // (u5){a=1, b=2} ∪ (u7){b=4, c=3} = (u5){a=1, b=2, c=3}
+    const CFirst = Or(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
+    try expectIdenticalEnums(CFirst, enum(u5) { a = 1, b, c });
+
+    // pick second tag/value
+    // (u5){a=1, b=2} ∪ (u7){b=4, c=3} = (u7){a=1, b=4, c=3}
+    const CSecond = Or(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .second } });
+    try expectIdenticalEnums(CSecond, enum(u7) { a = 1, b = 4, c = 3 });
+
+    // pick exact tag (u8), min value
+    // (u5){a=1, b=2} ∪ (u7){b=4, c=3} = (u8){a=1, b=2, c=3}
+    const T = u8;
+    const CExactMin = Or(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .min } });
+    try expectIdenticalEnums(CExactMin, enum(T) { a = 1, b, c });
+
+    // pick exact tag (u8), max value
+    // (u5){a=1, b=2} ∪ (u7){b=4, c=3} = (u8){a=1, b=4, c=3}
+    const CExactMax = Or(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .max } });
+    try expectIdenticalEnums(CExactMax, enum(T) { a = 1, b = 4, c = 3 });
+}
+
 /// Set **union** operation on enums `A ∪ B`, enums treated as untagged
 pub fn OrUntagged(comptime A: type, comptime B: type) type {
     const options = Options{
@@ -231,6 +337,15 @@ pub fn OrUntagged(comptime A: type, comptime B: type) type {
     };
 
     return Or(A, B, options);
+}
+
+test "enum OR untagged" {
+    const A = enum { a, b };
+    const B = enum { b, c };
+
+    // {a, b} ∪ {b, c} = {a, b, c}
+    const C = OrUntagged(A, B);
+    try expectIdenticalEnums(C, enum { a, b, c });
 }
 
 /// Set **difference** operation on enums `A \ B`
@@ -272,6 +387,47 @@ pub fn Diff(comptime A: type, comptime B: type, comptime options: Options) type 
     return @Type(C);
 }
 
+test "enum difference" {
+    {
+        const A = enum(u8) { a = 1, b = 2, c = 3 };
+        const B = enum(u8) { c = 1, d = 2, e = 3 };
+
+        // default behaviour is to expect equal tags/values,
+        // throw compile error otherwise; in case of diff operation
+        // second comparison is irrelevant
+        // (u8){a=1, b=2, c=3} \ (u8){c=1, d=2, e=3} = (u8){a=1, b=2}
+        const CDefault = Diff(A, B, .{});
+        try expectIdenticalEnums(CDefault, enum(u8) { a = 1, b });
+    }
+
+    const A = enum(u5) { a = 1, b = 2, c = 3 };
+    const B = enum(u7) { c = 1, d = 2, e = 3 };
+
+    // auto value/tag fill (same as untagged)
+    // (u5){a=1, b=2, c=3} \ (u7){c=1, d=2, e=3} = {a, b}
+    const CAuto = Diff(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
+    try expectIdenticalEnums(CAuto, enum { a, b });
+
+    // pick first tag/value
+    // (u5){a=1, b=2, c=3} \ (u7){c=1, d=2, e=3} = (u5){a=1, b=2}
+    const CFirst = Diff(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
+    try expectIdenticalEnums(CFirst, enum(u5) { a = 1, b });
+
+    // picking second/min/max value doesn't make sense for diff operation
+
+    // pick second tag, auto value
+    // (u5){a=1, b=2, c=3} \ (u7){c=1, d=2, e=3} = (u7){a, b}
+    const CSecond = Diff(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .auto } });
+    try expectIdenticalEnums(CSecond, enum(u7) { a, b });
+
+    // pick exact tag (u4), auto value
+    // (u5){a=1, b=2, c=3} \ (u7){c=1, d=2, e=3} = (u4){a, b}
+    const T = u4;
+    const CExact = Diff(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .auto } });
+    try expectIdenticalEnums(CExact, enum(u4) { a, b }); // T instead of u4 results in segfault?
+
+}
+
 /// Set **difference** operation on enums `A \ B`, enums treated as untagged
 pub fn DiffUntagged(comptime A: type, comptime B: type) type {
     const options = Options{
@@ -280,6 +436,15 @@ pub fn DiffUntagged(comptime A: type, comptime B: type) type {
     };
 
     return Diff(A, B, options);
+}
+
+test "enum difference untagged" {
+    const A = enum { a, b, c };
+    const B = enum { c, d, e };
+
+    // {a, b, c} \ {c, d, e} = {a, b}
+    const C = DiffUntagged(A, B);
+    try expectIdenticalEnums(C, enum { a, b });
 }
 
 /// Set **symmetric difference** operation on enums `A △ B = (A \ B) ∪ (B \ A)`, also denoted as `A ⊖ B`
@@ -293,6 +458,46 @@ pub fn Xor(comptime A: type, comptime B: type, comptime options: Options) type {
     );
 }
 
+test "enum XOR" {
+    {
+        const A = enum(u8) { a = 1, b = 2, c = 3 };
+        const B = enum(u8) { b = 1, c = 2, d = 3 };
+
+        // default behaviour is to expect equal tags/values,
+        // throw compile error otherwise; in case of XOR operation
+        // second comparison is irrelevant
+        // (u8){a=1, b=2, c=3} △ (u8){b=1, c=2, d=3} = (u8){a=1, d=3}
+        const CDefault = Xor(A, B, .{});
+        try expectIdenticalEnums(CDefault, enum(u8) { a = 1, d = 3 });
+    }
+
+    const A = enum(u5) { a = 1, b = 2, c = 3 };
+    const B = enum(u7) { b = 1, c = 2, d = 3 };
+
+    // auto value/tag fill (same as untagged)
+    // (u5){a=1, b=2, c=3} △ (u7){b=1, c=2, d=3} = {a, d}
+    const CAuto = Xor(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
+    try expectIdenticalEnums(CAuto, enum { a, d });
+
+    // pick first tag/value
+    // (u5){a=1, b=2, c=3} △ (u7){b=1, c=2, d=3} = (u5){a=1, d=3}
+    const CFirst = Xor(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
+    try expectIdenticalEnums(CFirst, enum(u5) { a = 1, d = 3 });
+
+    // picking second/min/max value doesn't make sense for XOR operation
+
+    // pick second tag, auto value
+    // (u5){a=1, b=2, c=3} △ (u7){b=1, c=2, d=3} = (u7){a, d}
+    const CSecond = Xor(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .auto } });
+    try expectIdenticalEnums(CSecond, enum(u7) { a, d });
+
+    // pick exact tag, auto value
+    // (u5){a=1, b=2, c=3} △ (u7){b=1, c=2, d=3} = (u4){a, d}
+    const T = u4;
+    const CExact = Xor(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .auto } });
+    try expectIdenticalEnums(CExact, enum(u4) { a, d });
+}
+
 /// Set **symmetric difference** operation on enums `A △ B = (A \ B) ∪ (B \ A)`, also denoted as `A ⊖ B`,
 /// enums treated as untagged
 pub fn XorUntagged(comptime A: type, comptime B: type) type {
@@ -304,307 +509,13 @@ pub fn XorUntagged(comptime A: type, comptime B: type) type {
     return Xor(A, B, options);
 }
 
-fn expectIdenticalEnums(comptime A: type, comptime B: type) !void {
-    comptime {
-        if (!enumsCompatible(A, B)) return error.TestUnexpectedResult;
-        var result = @typeInfo(A).Enum.tag_type == @typeInfo(B).Enum.tag_type;
-        result = result and meta.fields(A).len == meta.fields(B).len;
-        result = result and blk: for (meta.fields(A)) |field, i| {
-            if (!std.mem.eql(u8, meta.fields(B)[i].name, field.name)) break :blk false;
-            if (meta.fields(B)[i].value != field.value) break :blk false;
-        } else break :blk true;
-        if (!result) return error.TestUnexpectedResult;
-    }
-}
-
-test "enum AND untagged" {
-    const A = enum {
-        a,
-        b,
-        c,
-    };
-    const B = enum {
-        b,
-        c,
-        d,
-    };
-
-    // {a, b, c} ∩ {b, c, d} = {b, c}
-    const C = AndUntagged(A, B);
-    try expectIdenticalEnums(C, enum { b, c });
-}
-
-test "enum AND" {
-    {
-        // default behaviour is to expect equal tags/values,
-        // throw compile error otherwise
-        const A = enum(u8) { a = 0, b = 1, c = 2 };
-        const B = enum(u8) { b = 1, c = 2, d = 3 };
-
-        // (u8){a=0, b=1, c=2} ∩ (u8){b=1, c=2, d=3} = (u8){b=1, c=2}
-        const C = And(A, B, .{});
-        try expectIdenticalEnums(C, enum(u8) { b = 1, c });
-    }
-    {
-        // auto value/tag fill (same as untagged)
-        const A = enum(u5) { a = 0, b = 1, c = 2 };
-        const B = enum(u7) { b = 1, c = 2, d = 3 };
-
-        // (u5){a=0, b=1, c=2} ∩ (u7){b=1, c=2, d=3} = {b, c}
-        const C = And(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
-        try expectIdenticalEnums(C, enum { b, c });
-    }
-    {
-        // pick first tag/value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { b = 1, c = 2, d = 3 };
-
-        // (u5){a=1, b=2, c=3} ∩ (u7){b=1, c=2, d=3} = (u5){b=2, c=3}
-        const C = And(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
-        try expectIdenticalEnums(C, enum(u5) { b = 2, c });
-    }
-    {
-        // pick second tag/value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { b = 1, c = 2, d = 3 };
-
-        // (u5){a=1, b=2, c=3} ∩ (u7){b=1, c=2, d=3} = (u7){b=1, c=2}
-        const C = And(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .second } });
-        try expectIdenticalEnums(C, enum(u7) { b = 1, c });
-    }
-    {
-        // pick exact tag, min value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { b = 1, c = 2, d = 3 };
-
-        // (u5){a=1, b=2, c=3} ∩ (u7){b=1, c=2, d=3} = (u8){b=1, c=2}
-        const T = u8;
-        const C = And(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .min } });
-        try expectIdenticalEnums(C, enum(T) { b = 1, c });
-    }
-    {
-        // pick exact tag, max value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { b = 1, c = 2, d = 3 };
-
-        // (u5){a=1, b=2, c=3} ∩ (u7){b=1, c=2, d=3} = (u8){b=2, c=3}
-        const T = u8;
-        const C = And(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .max } });
-        try expectIdenticalEnums(C, enum(T) { b = 2, c });
-    }
-}
-
-test "enum OR untagged" {
-    const A = enum {
-        a,
-        b,
-    };
-    const B = enum {
-        b,
-        c,
-    };
-
-    // {a, b} ∪ {b, c} = {a, b, c}
-    const C = OrUntagged(A, B);
-    try expectIdenticalEnums(C, enum { a, b, c });
-}
-
-test "enum OR" {
-    {
-        // default behaviour is to expect equal tags/values,
-        // throw compile error otherwise
-        const A = enum(u8) { a = 0, b = 1 };
-        const B = enum(u8) { b = 1, c = 2 };
-
-        // (u8){a=0, b=1} ∪ (u8){b=1, c=2} = (u8){a=0, b=1, c=2}
-        const C = Or(A, B, .{});
-        try expectIdenticalEnums(C, enum(u8) { a = 0, b, c });
-    }
-    {
-        // auto value/tag fill (same as untagged)
-        const A = enum(u5) { a = 0, b = 1 };
-        const B = enum(u7) { b = 1, c = 2 };
-
-        // (u5){a=0, b=1} ∪ (u7){b=1, c=2} = {a, b, c}
-        const C = Or(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
-        try expectIdenticalEnums(C, enum { a, b, c });
-    }
-    {
-        // pick first tag/value
-        const A = enum(u5) { a = 1, b = 2 };
-        const B = enum(u7) { b = 1, c = 3 };
-
-        // (u5){a=1, b=2} ∪ (u7){b=1, c=3} = (u5){a=1, b=2, c=3}
-        const C = Or(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
-        try expectIdenticalEnums(C, enum(u5) { a = 1, b, c });
-    }
-    {
-        // pick second tag/value
-        const A = enum(u5) { a = 0, b = 1 };
-        const B = enum(u7) { b = 2, c = 3 };
-
-        // (u5){a=0, b=1} ∪ (u7){b=2, c=3} = (u7){a=0, b=2, c=3}
-        const C = Or(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .second } });
-        try expectIdenticalEnums(C, enum(u7) { a, b = 2, c });
-    }
-    {
-        // pick exact tag, min value
-        const A = enum(u5) { a = 0, b = 3 };
-        const B = enum(u7) { b = 1, c = 2 };
-
-        // (u5){a=0, b=3} ∪ (u7){b=1, c=2} = (u8){a=0, b=1, c=2}
-        const T = u8;
-        const C = Or(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .min } });
-        try expectIdenticalEnums(C, enum(T) { a, b, c });
-    }
-    {
-        // pick exact tag, max value
-        const A = enum(u5) { a = 0, b = 3 };
-        const B = enum(u7) { b = 1, c = 2 };
-
-        // (u5){a=0, b=3} ∪ (u7){b=1, c=2} = (u8){a=0, b=3, c=2}
-        const T = u8;
-        const C = Or(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .max } });
-        try expectIdenticalEnums(C, enum(T) { a = 0, b = 3, c = 2 });
-    }
-}
-
-test "enum difference untagged" {
-    const A = enum {
-        a,
-        b,
-        c,
-    };
-    const B = enum {
-        c,
-        d,
-        e,
-    };
-
-    // {a, b, c} \ {c, d, e} = {a, b}
-    const C = DiffUntagged(A, B);
-    try expectIdenticalEnums(C, enum { a, b });
-}
-
-test "enum difference" {
-    {
-        // default behaviour is to expect equal tags/values,
-        // throw compile error otherwise; in case of diff operation
-        // second comparison is irrelevant
-        const A = enum(u8) { a = 1, b = 2, c = 3 };
-        const B = enum(u8) { c = 1, d = 2, e = 3 };
-
-        // (u8){a=1, b=2, c=3} \ (u8){c=1, d=2, e=3} = (u8){a=1, b=2}
-        const C = Diff(A, B, .{});
-        try expectIdenticalEnums(C, enum(u8) { a = 1, b });
-    }
-    {
-        // auto value/tag fill (same as untagged)
-        const A = enum(u5) { a = 0, b = 1, c = 2 };
-        const B = enum(u7) { c = 1, d = 2, e = 3 };
-
-        // (u5){a=0, b=1, c=2} \ (u7){c=1, d=2, e=3} = {a, b}
-        const C = Diff(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
-        try expectIdenticalEnums(C, enum { a, b });
-    }
-    {
-        // pick first tag/value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { c = 1, d = 2, e = 3 };
-
-        // (u5){a=1, b=2, c=3} \ (u7){c=1, d=2, e=3} = (u5){a=1, b=2}
-        const C = Diff(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
-        try expectIdenticalEnums(C, enum(u5) { a = 1, b });
-    }
-    // picking second/min/max value doesn't make sense for diff operation
-    {
-        // pick second tag, auto value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { c = 1, d = 2, e = 3 };
-
-        // (u5){a=1, b=2, c=3} \ (u7){c=1, d=2, e=3} = (u7){a=0, b=1}
-        const C = Diff(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .auto } });
-        try expectIdenticalEnums(C, enum(u7) { a, b });
-    }
-    {
-        // pick exact tag, auto value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { c = 1, d = 2, e = 3 };
-
-        // (u5){a=1, b=2, c=3} \ (u7){c=1, d=2, e=3} = (u4){a=0, b=1}
-        const T = u4;
-        const C = Diff(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .auto } });
-        try expectIdenticalEnums(C, enum(u4) { a, b }); // T instead of u4 results in segfault?
-    }
-}
-
 test "enum XOR untagged" {
-    const A = enum {
-        a,
-        b,
-        c,
-    };
-    const B = enum {
-        c,
-        d,
-        e,
-    };
+    const A = enum { a, b, c };
+    const B = enum { c, d, e };
 
     // {a, b, c} △ {c, d, e} = {a, b, d, e}
     const C = XorUntagged(A, B);
     try expectIdenticalEnums(C, enum { a, b, d, e });
-}
-
-test "enum XOR" {
-    {
-        // default behaviour is to expect equal tags/values,
-        // throw compile error otherwise; in case of XOR operation
-        // second comparison is irrelevant
-        const A = enum(u8) { a = 1, b = 2, c = 3 };
-        const B = enum(u8) { b = 1, c = 2, d = 3 };
-
-        // (u8){a=1, b=2, c=3} △ (u8){b=1, c=2, d=3} = (u8){a=1, d=3}
-        const C = Xor(A, B, .{});
-        try expectIdenticalEnums(C, enum(u8) { a = 1, d = 3 });
-    }
-    {
-        // auto value/tag fill (same as untagged)
-        const A = enum(u5) { a = 0, b = 1, c = 2 };
-        const B = enum(u7) { b = 1, c = 2, d = 3 };
-
-        // (u5){a=0, b=1, c=2} △ (u7){b=1, c=2, d=3} = {a, d}
-        const C = Xor(A, B, .{ .tag = .{ .predefined = .auto }, .value = .{ .predefined = .auto } });
-        try expectIdenticalEnums(C, enum { a, d });
-    }
-    {
-        // pick first tag/value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { b = 1, c = 2, d = 3 };
-
-        // (u5){a=1, b=2, c=3} △ (u7){b=1, c=2, d=3} = (u5){a=1, d=3}
-        const C = Xor(A, B, .{ .tag = .{ .predefined = .first }, .value = .{ .predefined = .first } });
-        try expectIdenticalEnums(C, enum(u5) { a = 1, d = 3 });
-    }
-    // picking second/min/max value doesn't make sense for XOR operation
-    {
-        // pick second tag, auto value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { b = 1, c = 2, d = 3 };
-
-        // (u5){a=1, b=2, c=3} △ (u7){b=1, c=2, d=3} = (u7){a=0, d=1}
-        const C = Xor(A, B, .{ .tag = .{ .predefined = .second }, .value = .{ .predefined = .auto } });
-        try expectIdenticalEnums(C, enum(u7) { a, d });
-    }
-    {
-        // pick exact tag, auto value
-        const A = enum(u5) { a = 1, b = 2, c = 3 };
-        const B = enum(u7) { b = 1, c = 2, d = 3 };
-
-        // (u5){a=1, b=2, c=3} △ (u7){b=1, c=2, d=3} = (u4){a=0, d=1}
-        const T = u4;
-        const C = Xor(A, B, .{ .tag = .{ .predefined = .exact }, .tag_arg = Any.wrap(&T), .value = .{ .predefined = .auto } });
-        try expectIdenticalEnums(C, enum(u4) { a, d });
-    }
 }
 
 test "custom rule" {
